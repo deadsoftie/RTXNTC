@@ -36,16 +36,16 @@ namespace fs = std::filesystem;
 
 struct
 {
-    const char* loadImagesPath = nullptr;
-    const char* loadManifestFileName = nullptr;
-    const char* saveImagesPath = nullptr;
-    const char* loadCompressedFileName = nullptr;
-    const char* saveCompressedFileName = nullptr;
-    const char* saveManifestFileName = nullptr;
+    const char *loadImagesPath = nullptr;
+    const char *loadManifestFileName = nullptr;
+    const char *saveImagesPath = nullptr;
+    const char *loadCompressedFileName = nullptr;
+    const char *saveCompressedFileName = nullptr;
+    const char *saveManifestFileName = nullptr;
     /** Optional: semantics.json path for resolving channel strings when writing --saveManifest (see Manifest.h). */
-    const char* writeManifestSemanticsJson = nullptr;
+    const char *writeManifestSemanticsJson = nullptr;
     ToolInputType inputType = ToolInputType::None;
-    std::vector<char const*> loadImagesList;
+    std::vector<char const *> loadImagesList;
     std::optional<ntc::BlockCompressedFormat> bcFormat;
     ImageContainer imageFormat = ImageContainer::Auto;
     bool compress = false;
@@ -62,6 +62,7 @@ struct
     bool listAdapters = false;
     bool listCudaDevices = false;
     bool describe = false;
+    bool probeInferenceWeights = false;
     bool discardMaskedOutPixels = false;
     bool enableCoopVec = true;
     bool enableGpuDeflate = false;
@@ -88,74 +89,78 @@ struct
     ntc::LosslessCompressionSettings losslessCompression;
 } g_options;
 
-bool ProcessCommandLine(int argc, const char** argv)
+bool ProcessCommandLine(int argc, const char **argv)
 {
-    const char* bcFormatString = nullptr;
-    const char* imageFormatString = nullptr;
-    const char* dimensionsString = nullptr;
-    const char* gdeflateString = nullptr;
+    const char *bcFormatString = nullptr;
+    const char *imageFormatString = nullptr;
+    const char *dimensionsString = nullptr;
+    const char *gdeflateString = nullptr;
 
     struct argparse_option options[] = {
         OPT_GROUP("Actions:"),
         OPT_BOOLEAN('c', "compress", &g_options.compress, "Perform NTC compression"),
         OPT_BOOLEAN('D', "decompress", &g_options.decompress, "Perform NTC decompression (implied when needed)"),
         OPT_BOOLEAN('d', "describe", &g_options.describe, "Describe the contents of a compressed texture set"),
+        OPT_BOOLEAN(0, "probeInferenceWeights", &g_options.probeInferenceWeights,
+                    "Project 4 Stage C, Phase C0 check #1: query CoopVecFP8 inference-weight support and "
+                    "availability for a --loadCompressed texture set (IsInferenceWeightTypeSupported, "
+                    "GetInferenceWeights, MakeInferenceData) without decompressing anything"),
         OPT_BOOLEAN('g', "generateMips", &g_options.generateMips, "Generate MIP level images before compression"),
-        OPT_STRING (0,   "loadCompressed", &g_options.loadCompressedFileName, "Load compressed texture set from the specified file"),
-        OPT_STRING (0,   "loadImages", &g_options.loadImagesPath, "Load channel images from the specified folder"),
-        OPT_STRING (0,   "loadManifest", &g_options.loadManifestFileName, "Load channel images and their parameters using the specified JSON manifest file"),
-        OPT_BOOLEAN(0,   "loadMips", &g_options.loadMips, "Load MIP level images from <loadImages>/mips/<texture>.<mip>.<ext> before compression"),
-        OPT_BOOLEAN(0,   "optimizeBC", &g_options.optimizeBC, "Run slow BC compression and store acceleration info in the NTC package"),
-        OPT_BOOLEAN(0,   "readManifestFromStdin", &g_options.readManifestFromStdin, "Load channel images using a JSON manifest passed through standard input (stdin)"),
-        OPT_STRING ('o', "saveCompressed", &g_options.saveCompressedFileName, "Save compressed texture set into the specified file"),
-        OPT_STRING ('i', "saveImages", &g_options.saveImagesPath, "Save channel images into the specified folder"),
-        OPT_STRING (0,   "saveManifest", &g_options.saveManifestFileName, "Save a manifest JSON file (only for image inputs)"),
-        OPT_STRING (0,   "writeManifestSemanticsJson", &g_options.writeManifestSemanticsJson,
-            "With --saveManifest, use this semantics.json for per-slot channel strings (R/RGB/...); if omitted, "
-            "semantics.json beside the manifest path is used when present"),
-        OPT_BOOLEAN(0,   "saveMips", &g_options.saveMips, "Save MIP level images into <saveImages>/mips/ after decompression"),
-        OPT_BOOLEAN(0,   "version", &g_options.printVersion, "Print version information and exit"),
+        OPT_STRING(0, "loadCompressed", &g_options.loadCompressedFileName, "Load compressed texture set from the specified file"),
+        OPT_STRING(0, "loadImages", &g_options.loadImagesPath, "Load channel images from the specified folder"),
+        OPT_STRING(0, "loadManifest", &g_options.loadManifestFileName, "Load channel images and their parameters using the specified JSON manifest file"),
+        OPT_BOOLEAN(0, "loadMips", &g_options.loadMips, "Load MIP level images from <loadImages>/mips/<texture>.<mip>.<ext> before compression"),
+        OPT_BOOLEAN(0, "optimizeBC", &g_options.optimizeBC, "Run slow BC compression and store acceleration info in the NTC package"),
+        OPT_BOOLEAN(0, "readManifestFromStdin", &g_options.readManifestFromStdin, "Load channel images using a JSON manifest passed through standard input (stdin)"),
+        OPT_STRING('o', "saveCompressed", &g_options.saveCompressedFileName, "Save compressed texture set into the specified file"),
+        OPT_STRING('i', "saveImages", &g_options.saveImagesPath, "Save channel images into the specified folder"),
+        OPT_STRING(0, "saveManifest", &g_options.saveManifestFileName, "Save a manifest JSON file (only for image inputs)"),
+        OPT_STRING(0, "writeManifestSemanticsJson", &g_options.writeManifestSemanticsJson,
+                   "With --saveManifest, use this semantics.json for per-slot channel strings (R/RGB/...); if omitted, "
+                   "semantics.json beside the manifest path is used when present"),
+        OPT_BOOLEAN(0, "saveMips", &g_options.saveMips, "Save MIP level images into <saveImages>/mips/ after decompression"),
+        OPT_BOOLEAN(0, "version", &g_options.printVersion, "Print version information and exit"),
         OPT_HELP(),
-        
+
         OPT_GROUP("Basic compression options:"),
-        OPT_FLOAT  ('b', "bitsPerPixel", &g_options.bitsPerPixel, "Request an optimal compression configuration for the provided BPP value"),
-        OPT_FLOAT  (0,   "maxBitsPerPixel", &g_options.maxBitsPerPixel, "Maximum BPP value to use in the compression parameter search"),
-        OPT_FLOAT  ('p', "targetPsnr", &g_options.targetPsnr, "Perform compression parameter search to reach at least the provided PSNR value"),
-        
+        OPT_FLOAT('b', "bitsPerPixel", &g_options.bitsPerPixel, "Request an optimal compression configuration for the provided BPP value"),
+        OPT_FLOAT(0, "maxBitsPerPixel", &g_options.maxBitsPerPixel, "Maximum BPP value to use in the compression parameter search"),
+        OPT_FLOAT('p', "targetPsnr", &g_options.targetPsnr, "Perform compression parameter search to reach at least the provided PSNR value"),
+
         OPT_GROUP("Custom latent shape selection:"),
         OPT_INTEGER(0, "gridSizeScale", &g_options.gridSizeScale, "Ratio of source image size to high-resolution feature grid size"),
         OPT_INTEGER(0, "numFeatures", &g_options.numFeatures, "Number of features"),
-        
+
         OPT_GROUP("Training process controls:"),
-        OPT_FLOAT  (0,   "gridLearningRate", &g_options.compressionSettings.gridLearningRate, "Maximum learning rate for the feature grid"),
-        OPT_INTEGER(0,   "kPixelsPerBatch", &g_options.compressionSettings.kPixelsPerBatch, "Number of kilopixels from the image to process in one training step"),
-        OPT_FLOAT  (0,   "networkLearningRate", &g_options.compressionSettings.networkLearningRate, "Maximum learning rate for the MLP weights"),
-        OPT_INTEGER(0,   "randomSeed", &g_options.compressionSettings.randomSeed, "Random seed, set to a nonzero value to get more stable compression results"),
-        OPT_BOOLEAN(0,   "stableTraining", &g_options.compressionSettings.stableTraining, "Use a more expensive but more numerically stable training algorithm for reproducible results"),
-        OPT_INTEGER(0,   "stepsPerIteration", &g_options.compressionSettings.stepsPerIteration, "Training steps between progress reports"),
+        OPT_FLOAT(0, "gridLearningRate", &g_options.compressionSettings.gridLearningRate, "Maximum learning rate for the feature grid"),
+        OPT_INTEGER(0, "kPixelsPerBatch", &g_options.compressionSettings.kPixelsPerBatch, "Number of kilopixels from the image to process in one training step"),
+        OPT_FLOAT(0, "networkLearningRate", &g_options.compressionSettings.networkLearningRate, "Maximum learning rate for the MLP weights"),
+        OPT_INTEGER(0, "randomSeed", &g_options.compressionSettings.randomSeed, "Random seed, set to a nonzero value to get more stable compression results"),
+        OPT_BOOLEAN(0, "stableTraining", &g_options.compressionSettings.stableTraining, "Use a more expensive but more numerically stable training algorithm for reproducible results"),
+        OPT_INTEGER(0, "stepsPerIteration", &g_options.compressionSettings.stepsPerIteration, "Training steps between progress reports"),
         OPT_INTEGER('S', "trainingSteps", &g_options.compressionSettings.trainingSteps, "Total training step count"),
-        
+
         OPT_GROUP("Output settings:"),
-        OPT_STRING ('B', "bcFormat", &bcFormatString, "Set or override the BCn encoding format, BC1-BC7"),
-        OPT_STRING ('F', "imageFormat", &imageFormatString, "Set the output file format for color images: Auto (default), BMP, JPG, TGA, PNG, PNG16, EXR"),
-        OPT_STRING (0,   "dimensions", &dimensionsString, "Set the dimensions of the NTC texture set before compression, in the 'WxH' format"),
-        OPT_BOOLEAN(0,   "dithering", &g_options.enableDithering, "Enable dithering for 8-bit output textures when decompressing with graphics APIs (default on, use --no-dithering)"),
-        
+        OPT_STRING('B', "bcFormat", &bcFormatString, "Set or override the BCn encoding format, BC1-BC7"),
+        OPT_STRING('F', "imageFormat", &imageFormatString, "Set the output file format for color images: Auto (default), BMP, JPG, TGA, PNG, PNG16, EXR"),
+        OPT_STRING(0, "dimensions", &dimensionsString, "Set the dimensions of the NTC texture set before compression, in the 'WxH' format"),
+        OPT_BOOLEAN(0, "dithering", &g_options.enableDithering, "Enable dithering for 8-bit output textures when decompressing with graphics APIs (default on, use --no-dithering)"),
+
         OPT_GROUP("Advanced settings:"),
-        OPT_FLOAT  (0,   "bcPsnrThreshold", &g_options.bcPsnrThreshold, "PSNR loss threshold for BC7 optimization, in dB, default value is 0.2"),
-        OPT_INTEGER(0,   "benchmark", &g_options.benchmarkIterations, "Number of iterations to run over compute passes for benchmarking"),
-        OPT_BOOLEAN(0,   "discardMaskedOutPixels", &g_options.discardMaskedOutPixels, "Ignore contents of pixels where alpha mask is 0.0 (requires the AlphaMask semantic)"),
-        OPT_FLOAT  (0,   "experimentalKnob", &g_options.experimentalKnob, "A parameter for NTC development, normally has no effect"),
-        OPT_BOOLEAN(0,   "matchBcPsnr", &g_options.matchBcPsnr, "Perform compression parameter search to reach the PSNR value that BCn encoding provides"),
-        OPT_FLOAT  (0,   "minBcPsnr", &g_options.minBcPsnr, "When using --matchBcPsnr, minimum PSNR value to use for NTC compression"),
-        OPT_FLOAT  (0,   "maxBcPsnr", &g_options.maxBcPsnr, "When using --matchBcPsnr, maximum PSNR value to use for NTC compression"),
-        OPT_FLOAT  (0,   "bcPsnrOffset", &g_options.bcPsnrOffset, "When using --matchBcPsnr, offset to apply to BCn PSNR value before NTC compression"),
-        OPT_STRING (0,   "gdeflate", &gdeflateString, "Controls which parts of the texture set file should be compressed with GDeflate (off/none, bc, latents, all; default is bc)"),
-        OPT_FLOAT  (0,   "gdeflateThreshold", &g_options.losslessCompression.compressionRatioThreshold,
-            "Don't use GDeflate compression if sizeof(compressedData) >= sizeof(uncompressedData) * X, default is 0.95"),
-        OPT_INTEGER(0,   "gdeflateLevel", &g_options.losslessCompression.compressionLevel, "GDeflate compression level, 0-12, default is 9"),
-        OPT_INTEGER(0,   "gdeflateThreads", &g_options.losslessCompression.compressionThreads, "Number of GDeflate compression threads, 0 means auto, -1 means disable"),
-        OPT_BOOLEAN(0,   "keepFileNames", &g_options.keepFileNames, "Use original image file names as texture names, not their distinct components"),
+        OPT_FLOAT(0, "bcPsnrThreshold", &g_options.bcPsnrThreshold, "PSNR loss threshold for BC7 optimization, in dB, default value is 0.2"),
+        OPT_INTEGER(0, "benchmark", &g_options.benchmarkIterations, "Number of iterations to run over compute passes for benchmarking"),
+        OPT_BOOLEAN(0, "discardMaskedOutPixels", &g_options.discardMaskedOutPixels, "Ignore contents of pixels where alpha mask is 0.0 (requires the AlphaMask semantic)"),
+        OPT_FLOAT(0, "experimentalKnob", &g_options.experimentalKnob, "A parameter for NTC development, normally has no effect"),
+        OPT_BOOLEAN(0, "matchBcPsnr", &g_options.matchBcPsnr, "Perform compression parameter search to reach the PSNR value that BCn encoding provides"),
+        OPT_FLOAT(0, "minBcPsnr", &g_options.minBcPsnr, "When using --matchBcPsnr, minimum PSNR value to use for NTC compression"),
+        OPT_FLOAT(0, "maxBcPsnr", &g_options.maxBcPsnr, "When using --matchBcPsnr, maximum PSNR value to use for NTC compression"),
+        OPT_FLOAT(0, "bcPsnrOffset", &g_options.bcPsnrOffset, "When using --matchBcPsnr, offset to apply to BCn PSNR value before NTC compression"),
+        OPT_STRING(0, "gdeflate", &gdeflateString, "Controls which parts of the texture set file should be compressed with GDeflate (off/none, bc, latents, all; default is bc)"),
+        OPT_FLOAT(0, "gdeflateThreshold", &g_options.losslessCompression.compressionRatioThreshold,
+                  "Don't use GDeflate compression if sizeof(compressedData) >= sizeof(uncompressedData) * X, default is 0.95"),
+        OPT_INTEGER(0, "gdeflateLevel", &g_options.losslessCompression.compressionLevel, "GDeflate compression level, 0-12, default is 9"),
+        OPT_INTEGER(0, "gdeflateThreads", &g_options.losslessCompression.compressionThreads, "Number of GDeflate compression threads, 0 means auto, -1 means disable"),
+        OPT_BOOLEAN(0, "keepFileNames", &g_options.keepFileNames, "Use original image file names as texture names, not their distinct components"),
 
         OPT_GROUP("GPU and Graphics API settings:"),
         OPT_INTEGER(0, "adapter", &g_options.adapterIndex, "Index of the graphics adapter to use"),
@@ -174,28 +179,26 @@ bool ProcessCommandLine(int argc, const char** argv)
 #if NTC_WITH_OPTIX
         OPT_BOOLEAN(0, "optix", &g_options.useOptix, "Use OptiX API for decompression"),
 #endif
-        OPT_END()
-    };
+        OPT_END()};
 
-    static const char* usages[] = {
+    static const char *usages[] = {
         "ntc-cli [input-files|input-directory] <actions...> [options...]",
-        nullptr
-    };
+        nullptr};
 
-    struct argparse argparse {};
+    struct argparse argparse{};
     argparse_init(&argparse, options, usages, 0);
     argparse_describe(&argparse,
-        "\n"
-        "Neural texture compression and decompression tool.\n"
-        "\n"
-        "Inputs can be specified as positional arguments, in one of four modes:\n"
-        "    - Directory with image files (same as --loadImages)\n"
-        "    - Individual image files (.png, .tga, .jpg, .jpeg, .exr)\n"
-        "    - Manifest file with .json extension (same as --loadManifest)\n"
-        "    - Compressed texture set with .ntc extension (same as --loadCompressed)\n"
-        "\n"
-        "For the manifest file schema, please refer to docs/Manifest.md in the SDK.",
-        nullptr);
+                      "\n"
+                      "Neural texture compression and decompression tool.\n"
+                      "\n"
+                      "Inputs can be specified as positional arguments, in one of four modes:\n"
+                      "    - Directory with image files (same as --loadImages)\n"
+                      "    - Individual image files (.png, .tga, .jpg, .jpeg, .exr)\n"
+                      "    - Manifest file with .json extension (same as --loadManifest)\n"
+                      "    - Compressed texture set with .ntc extension (same as --loadCompressed)\n"
+                      "\n"
+                      "For the manifest file schema, please refer to docs/Manifest.md in the SDK.",
+                      nullptr);
     argparse_parse(&argparse, argc, argv);
 
     bool const useGapi = g_options.useVulkan || g_options.useDX12;
@@ -271,7 +274,7 @@ bool ProcessCommandLine(int argc, const char** argv)
     // Process positional arguments and detect their input types
     for (int i = 0; argparse.out[i]; ++i)
     {
-        char const* arg = argparse.out[i];
+        char const *arg = argparse.out[i];
         if (!arg[0])
             continue;
 
@@ -323,7 +326,7 @@ bool ProcessCommandLine(int argc, const char** argv)
     if (g_options.inputType == ToolInputType::Mixed)
     {
         fprintf(stderr, "Cannot process inputs of mismatching types (image files, directories, manifests, "
-            "compressed texture sets) or multiple inputs of the same type except for images.\n");
+                        "compressed texture sets) or multiple inputs of the same type except for images.\n");
         return false;
     }
 
@@ -383,7 +386,7 @@ bool ProcessCommandLine(int argc, const char** argv)
         fprintf(stderr, "The --bcPsnrThreshold value (%f) must be between 0 and 10.\n", g_options.bcPsnrThreshold);
         return false;
     }
-        
+
     if (g_options.matchBcPsnr && !std::isnan(g_options.targetPsnr))
     {
         fprintf(stderr, "The --targetPsnr and --matchBcPsnr options cannot be used at the same time.");
@@ -401,7 +404,7 @@ bool ProcessCommandLine(int argc, const char** argv)
         fprintf(stderr, "The --matchBcPsnr option requires either --vk or --dx12 (where available).");
         return false;
     }
-    
+
     if (bcFormatString)
     {
         g_options.bcFormat = ParseBlockCompressedFormat(bcFormatString, /* enableAuto = */ true);
@@ -411,7 +414,7 @@ bool ProcessCommandLine(int argc, const char** argv)
             return false;
         }
     }
-    
+
     if (imageFormatString)
     {
         auto parsedFormat = ParseImageContainer(imageFormatString);
@@ -432,14 +435,14 @@ bool ProcessCommandLine(int argc, const char** argv)
         if (sscanf(dimensionsString, "%dx%d", &width, &height) != 2)
         {
             fprintf(stderr, "Invalid format for --dimensions '%s', must be 'WxH' where W and H are integers.\n",
-                dimensionsString);
+                    dimensionsString);
             return false;
         }
 
         if (width <= 0 || height <= 0)
         {
             fprintf(stderr, "Invalid values specified in --dimensions (%dx%d), must be 1x1 or more.\n",
-                width, height);
+                    width, height);
             return false;
         }
 
@@ -499,14 +502,14 @@ bool ProcessCommandLine(int argc, const char** argv)
     return true;
 }
 
-bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureSet)
+bool SaveImagesFromTextureSet(ntc::IContext *context, ntc::ITextureSet *textureSet)
 {
-    const ntc::TextureSetDesc& textureSetDesc = textureSet->GetDesc();
+    const ntc::TextureSetDesc &textureSetDesc = textureSet->GetDesc();
     fs::path const outputPath = g_options.saveImagesPath;
     bool mipsDirCreated = false;
 
     int numTextures = textureSet->GetTextureCount();
-    
+
     std::mutex mutex;
     bool anyErrors = false;
 
@@ -514,7 +517,7 @@ bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
 
     for (int textureIndex = 0; textureIndex < numTextures; ++textureIndex)
     {
-        ntc::ITextureMetadata* texture = textureSet->GetTexture(textureIndex);
+        ntc::ITextureMetadata *texture = textureSet->GetTexture(textureIndex);
         assert(texture);
 
         ntc::BlockCompressedFormat bcFormat = texture->GetBlockCompressedFormat();
@@ -532,7 +535,7 @@ bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
             mipsDirCreated = true;
         }
 
-        const char* textureName = texture->GetName();
+        const char *textureName = texture->GetName();
         // Strip the "|ntcsem:...|" semantics suffix; ':' and '|' are illegal in filenames on Windows.
         std::string const textureFileName = StripNtcSemanticsSuffixForDisplay(textureName ? textureName : "");
         int firstChannel = 0;
@@ -562,7 +565,7 @@ bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
         if (container == ImageContainer::EXR)
             rgbColorSpace = ntc::ColorSpace::Linear;
 
-        ntc::ColorSpace const colorSpaces[4] = { rgbColorSpace, rgbColorSpace, rgbColorSpace, alphaColorSpace };
+        ntc::ColorSpace const colorSpaces[4] = {rgbColorSpace, rgbColorSpace, rgbColorSpace, alphaColorSpace};
 
         size_t const bytesPerComponent = ntc::GetBytesPerPixelComponent(channelFormat);
 
@@ -572,7 +575,7 @@ bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
             int mipHeight = std::max(1, textureSetDesc.height >> mip);
 
             size_t const mipDataSize = size_t(mipWidth) * size_t(mipHeight) * size_t(numChannels) * bytesPerComponent;
-            uint8_t* data = (uint8_t*)malloc(mipDataSize);
+            uint8_t *data = (uint8_t *)malloc(mipDataSize);
 
             ntc::ReadChannelsParameters params;
             params.page = ntc::TextureDataPage::Output;
@@ -594,7 +597,7 @@ bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
             if (ntcStatus != ntc::Status::Ok)
             {
                 fprintf(stderr, "Failed to read texture data for texture %d (%s) MIP %d, code = %s: %s\n",
-                    textureIndex, textureName, mip, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                        textureIndex, textureName, mip, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
                 free(data);
                 return false;
             }
@@ -612,11 +615,11 @@ bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
             {
                 outputFileName = (outputPath / textureFileName).generic_string();
             }
-            
+
             outputFileName += GetContainerExtension(container);
 
             StartAsyncTask([&mutex, container, outputFileName, mipWidth, mipHeight, numChannels, channelFormat, data, &anyErrors]()
-            {
+                           {
                 bool success = SaveImageToContainer(container, data, mipWidth, mipHeight, numChannels, outputFileName.c_str());
                 
                 // The rest of this function is interlocked with other threads
@@ -633,11 +636,9 @@ bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
                         mipWidth, mipHeight, numChannels, ntc::ChannelFormatToString(channelFormat));
                 }
 
-                free(data);
-            });
+                free(data); });
         }
     }
-
 
     WaitForAllTasks();
 
@@ -647,7 +648,7 @@ bool SaveImagesFromTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
     return true;
 }
 
-bool PickLatentShape(ntc::LatentShape& outShape)
+bool PickLatentShape(ntc::LatentShape &outShape)
 {
     if (!std::isnan(g_options.targetPsnr) || g_options.matchBcPsnr)
     {
@@ -665,7 +666,7 @@ bool PickLatentShape(ntc::LatentShape& outShape)
         }
 
         printf("Selected latent shape for %.3f bpp: --gridSizeScale %d --numFeatures %d\n",
-            selectedBpp, outShape.gridSizeScale, outShape.numFeatures);
+               selectedBpp, outShape.gridSizeScale, outShape.numFeatures);
     }
     else
     {
@@ -675,7 +676,7 @@ bool PickLatentShape(ntc::LatentShape& outShape)
     return true;
 }
 
-void OverrideTextureBcFormat(ntc::ITextureMetadata* texture, ManifestEntry* manifestEntry)
+void OverrideTextureBcFormat(ntc::ITextureMetadata *texture, ManifestEntry *manifestEntry)
 {
     // Override the BC format from command line, if specified.
     // Overriding with 'none' is also an option here.
@@ -697,12 +698,18 @@ void OverrideTextureBcFormat(ntc::ITextureMetadata* texture, ManifestEntry* mani
                 // Best quality options.
                 // If you want more control, use a manifest.
                 int const channels = texture->GetNumChannels();
-                switch(channels)
+                switch (channels)
                 {
-                    case 1:  bcFormat = ntc::BlockCompressedFormat::BC4; break;
-                    case 2:  bcFormat = ntc::BlockCompressedFormat::BC5; break;
-                    default: bcFormat = ntc::BlockCompressedFormat::BC7; break;
-                }       
+                case 1:
+                    bcFormat = ntc::BlockCompressedFormat::BC4;
+                    break;
+                case 2:
+                    bcFormat = ntc::BlockCompressedFormat::BC5;
+                    break;
+                default:
+                    bcFormat = ntc::BlockCompressedFormat::BC7;
+                    break;
+                }
             }
         }
 
@@ -719,7 +726,7 @@ void OverrideTextureBcFormat(ntc::ITextureMetadata* texture, ManifestEntry* mani
     }
 }
 
-ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
+ntc::ITextureSet *LoadImages(ntc::IContext *context, Manifest &manifest)
 {
     ntc::TextureSetDesc textureSetDesc{};
     textureSetDesc.mips = 1;
@@ -730,7 +737,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
 
     // Count the number of MIP 0 images in the manifest
     int numMipZeroImages = 0;
-    for (auto const& entry : manifest.textures)
+    for (auto const &entry : manifest.textures)
     {
         if (entry.mipLevel == 0)
             ++numMipZeroImages;
@@ -741,15 +748,15 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
         if (g_options.loadImagesPath)
         {
             fprintf(stderr, "Too many images (%d) found in the input folder. At most %d channels are supported.\n"
-                "Note: when loading images from a folder, a single material with all images is created. "
-                "To load a material with only some images from a folder, use manifest files or specify each image "
-                "on the command line separately.",
-                int(manifest.textures.size()), NTC_MAX_CHANNELS);
+                            "Note: when loading images from a folder, a single material with all images is created. "
+                            "To load a material with only some images from a folder, use manifest files or specify each image "
+                            "on the command line separately.",
+                    int(manifest.textures.size()), NTC_MAX_CHANNELS);
         }
         else
         {
             fprintf(stderr, "Too many images (%d) specified in the manifest. At most %d channels are supported.\n",
-                int(manifest.textures.size()), NTC_MAX_CHANNELS);
+                    int(manifest.textures.size()), NTC_MAX_CHANNELS);
         }
         return nullptr;
     }
@@ -765,7 +772,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
         int manifestIndex = 0;
         bool verticalFlip = false;
         std::string channelSwizzle;
-        std::array<stbi_uc*, NTC_MAX_MIPS> data {};
+        std::array<stbi_uc *, NTC_MAX_MIPS> data{};
         std::string name;
         ntc::ChannelFormat channelFormat = ntc::ChannelFormat::UNORM8;
         ntc::BlockCompressedFormat bcFormat = ntc::BlockCompressedFormat::None;
@@ -773,24 +780,25 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
         std::vector<float> lossFunctionScales;
 
         SourceImageData()
-        { }
+        {
+        }
 
-        SourceImageData(SourceImageData& other) = delete;
-        SourceImageData(SourceImageData&& other) = delete;
+        SourceImageData(SourceImageData &other) = delete;
+        SourceImageData(SourceImageData &&other) = delete;
 
         ~SourceImageData()
         {
             for (auto mipLevel : data)
             {
                 if (mipLevel)
-                    stbi_image_free((void*)mipLevel);
+                    stbi_image_free((void *)mipLevel);
             }
             data.fill(nullptr);
         }
     };
 
     std::vector<std::shared_ptr<SourceImageData>> images;
-    
+
     std::mutex mutex;
 
     bool anyErrors = false;
@@ -798,13 +806,13 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
     // Load the base images (mip level 0)
 
     int entryIndex = 0;
-    for (const auto& entry : manifest.textures)
+    for (const auto &entry : manifest.textures)
     {
         if (entry.mipLevel > 0)
             continue;
 
         StartAsyncTask([&mutex, &images, entry, entryIndex, &textureSetDesc, &anyErrors]()
-        {
+                       {
             std::shared_ptr<SourceImageData> image = std::make_shared<SourceImageData>();
 
             fs::path const fileName = entry.fileName;
@@ -899,8 +907,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
             textureSetDesc.width = std::max(image->width, textureSetDesc.width);
             textureSetDesc.height = std::max(image->height, textureSetDesc.height);
 
-            images.push_back(image);
-        });
+            images.push_back(image); });
 
         ++entryIndex;
     }
@@ -923,8 +930,8 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
                 if (images[i]->name == images[ii]->name)
                 {
                     fprintf(stderr, "Multiple images have the same name '%s'.\n"
-                        "Make sure that input files have different and non-empty names (before extension).\n",
-                        images[i]->name.c_str());
+                                    "Make sure that input files have different and non-empty names (before extension).\n",
+                            images[i]->name.c_str());
                     anyErrors = true;
                     break;
                 }
@@ -936,26 +943,26 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
     {
         return nullptr;
     }
-    
+
     // Load the other mips
 
-    for (const auto& entry : manifest.textures)
+    for (const auto &entry : manifest.textures)
     {
         if (entry.mipLevel == 0)
             continue;
 
-        auto found = std::find_if(images.begin(), images.end(), [&entry](std::shared_ptr<SourceImageData> const& image)
-            { return image->name == entry.entryName; });
+        auto found = std::find_if(images.begin(), images.end(), [&entry](std::shared_ptr<SourceImageData> const &image)
+                                  { return image->name == entry.entryName; });
 
         if (found == images.end())
             continue;
 
-        std::shared_ptr<SourceImageData> const& image = *found;
+        std::shared_ptr<SourceImageData> const &image = *found;
 
         textureSetDesc.mips = std::max(textureSetDesc.mips, entry.mipLevel + 1);
 
         StartAsyncTask([&mutex, &image, entry, &anyErrors]()
-        {
+                       {
             const fs::path fileName = entry.fileName;
             std::string extension = fileName.extension().generic_string();
             LowercaseString(extension);
@@ -1019,8 +1026,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
             }
 
             printf("Loaded image '%s': %dx%d pixels.\n", fileName.filename().generic_string().c_str(),
-                width, height);
-        });
+                width, height); });
     }
 
     WaitForAllTasks();
@@ -1059,19 +1065,18 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
         textureSetDesc.mips = int(floorf(std::log2f(float(std::max(textureSetDesc.width, textureSetDesc.height)))) + 1);
     }
 
-
     // Verify that we have images for all mips
 
     if (g_options.loadMips)
     {
-        for (auto& image : images)
+        for (auto &image : images)
         {
             for (int mip = 0; mip < textureSetDesc.mips; ++mip)
             {
                 if (!image->data[mip])
                 {
                     fprintf(stderr, "Channel '%s' doesn't have an image for MIP level %d.\n",
-                        image->name.c_str(), mip);
+                            image->name.c_str(), mip);
                     anyErrors = true;
                 }
             }
@@ -1085,15 +1090,14 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
 
     // Sort the images in manifest order, to make channel assignment easy to control.
 
-    std::sort(images.begin(), images.end(), [](std::shared_ptr<SourceImageData> const& a, std::shared_ptr<SourceImageData> const& b) {
-        return a->manifestIndex < b->manifestIndex;
-    });
+    std::sort(images.begin(), images.end(), [](std::shared_ptr<SourceImageData> const &a, std::shared_ptr<SourceImageData> const &b)
+              { return a->manifestIndex < b->manifestIndex; });
 
     // Assign channels to images:
     // Phase 1 - enumerate the explicitly specified channels and make sure they don't collide.
 
     uint32_t availableChannels = (1u << NTC_MAX_CHANNELS) - 1u;
-    for (std::shared_ptr<SourceImageData> const& image : images)
+    for (std::shared_ptr<SourceImageData> const &image : images)
     {
         if (image->firstChannel < 0)
             continue;
@@ -1102,19 +1106,19 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
         int const max1 = image->firstChannel + image->storedChannels - 1;
 
         if (max1 >= NTC_MAX_CHANNELS)
-        {   
+        {
             fprintf(stderr, "Texture '%s' uses channels %d-%d, and that is out of range of supported channels (0-%d).\n",
-                image->name.c_str(), min1, max1, NTC_MAX_CHANNELS - 1);
+                    image->name.c_str(), min1, max1, NTC_MAX_CHANNELS - 1);
             return nullptr;
         }
-            
+
         uint32_t const channelMask = ((1u << image->storedChannels) - 1u) << image->firstChannel;
         if (~availableChannels & channelMask)
         {
             int const min1 = image->firstChannel;
             int const max1 = image->firstChannel + image->storedChannels - 1;
 
-            for (std::shared_ptr<SourceImageData> const& otherImage : images)
+            for (std::shared_ptr<SourceImageData> const &otherImage : images)
             {
                 int const min2 = otherImage->firstChannel;
                 int const max2 = otherImage->firstChannel + otherImage->storedChannels - 1;
@@ -1122,7 +1126,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
                 if (image != otherImage && min1 <= max2 && min2 <= max1)
                 {
                     fprintf(stderr, "Texture '%s' uses channels %d-%d, and that range intersects with channels %d-%d used by texture '%s'.\n",
-                        image->name.c_str(), min1, max1, min2, max2, otherImage->name.c_str());
+                            image->name.c_str(), min1, max1, min2, max2, otherImage->name.c_str());
                     return nullptr;
                 }
             }
@@ -1135,7 +1139,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
 
     // Phase 2 - assign channels to images that don't have an explicit firstChannel attribute.
 
-    for (std::shared_ptr<SourceImageData> const& image : images)
+    for (std::shared_ptr<SourceImageData> const &image : images)
     {
         if (image->firstChannel >= 0)
             continue;
@@ -1155,7 +1159,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
         if (image->firstChannel < 0)
         {
             fprintf(stderr, "Failed to allocate %d channel(s) for texture '%s'.\n",
-                image->storedChannels, image->name.c_str());
+                    image->storedChannels, image->name.c_str());
             return nullptr;
         }
     }
@@ -1179,8 +1183,8 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
     if (ntcStatus != ntc::Status::Ok)
     {
         fprintf(stderr, "Failed to create a texture set for %dx%d pixels, %d channels, %d mips, code = %s\n%s\n",
-            textureSetDesc.width, textureSetDesc.height, textureSetDesc.channels, textureSetDesc.mips,
-            ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                textureSetDesc.width, textureSetDesc.height, textureSetDesc.channels, textureSetDesc.mips,
+                ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
         return nullptr;
     }
 
@@ -1188,15 +1192,15 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
     if (ntcStatus != ntc::Status::Ok)
     {
         fprintf(stderr, "Failed to set the latent shape to %d/%d, code = %s\n%s\n",
-            latentShape.gridSizeScale, latentShape.numFeatures,
-            ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                latentShape.gridSizeScale, latentShape.numFeatures,
+                ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
         return nullptr;
     }
-    
+
     // Upload the image data into the texture set
 
     int alphaMaskChannel = -1;
-    for (std::shared_ptr<SourceImageData> const& image : images)
+    for (std::shared_ptr<SourceImageData> const &image : images)
     {
         size_t const bytesPerComponent = ntc::GetBytesPerPixelComponent(image->channelFormat);
         size_t const pixelStride = 4 * bytesPerComponent;
@@ -1204,8 +1208,8 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
         ntc::ColorSpace const dstRgbColorSpace = image->channelFormat == ntc::ChannelFormat::FLOAT32 ? ntc::ColorSpace::HLG : srcRgbColorSpace;
         ntc::ColorSpace const srcAlphaColorSpace = ntc::ColorSpace::Linear;
         ntc::ColorSpace const dstAlphaColorSpace = image->channelFormat == ntc::ChannelFormat::FLOAT32 ? ntc::ColorSpace::HLG : srcAlphaColorSpace;
-        ntc::ColorSpace const srcColorSpaces[4] = { srcRgbColorSpace, srcRgbColorSpace, srcRgbColorSpace, srcAlphaColorSpace };
-        ntc::ColorSpace const dstColorSpaces[4] = { dstRgbColorSpace, dstRgbColorSpace, dstRgbColorSpace, dstAlphaColorSpace };
+        ntc::ColorSpace const srcColorSpaces[4] = {srcRgbColorSpace, srcRgbColorSpace, srcRgbColorSpace, srcAlphaColorSpace};
+        ntc::ColorSpace const dstColorSpaces[4] = {dstRgbColorSpace, dstRgbColorSpace, dstRgbColorSpace, dstAlphaColorSpace};
 
         for (int mip = 0; mip < textureSetDesc.mips; ++mip)
         {
@@ -1224,7 +1228,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
             params.rowPitch = size_t(mipWidth) * pixelStride;
             params.channelFormat = image->channelFormat;
             params.verticalFlip = image->verticalFlip;
-            
+
             if (image->channelSwizzle.empty())
             {
                 // No swizzle - write all channels at once
@@ -1235,7 +1239,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
                 params.dstColorSpaces = dstColorSpaces;
 
                 ntcStatus = textureSet->WriteChannels(params);
-                
+
                 if (mip == 0 && image->alphaMaskChannel >= 0)
                     alphaMaskChannel = image->alphaMaskChannel + image->firstChannel;
             }
@@ -1247,8 +1251,8 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
                 for (char ch : image->channelSwizzle)
                 {
                     // Decode the channel letter into an offset using a lookup string
-                    char const* channelMap = "RGBA";
-                    char const* channelPos = strchr(channelMap, ch);
+                    char const *channelMap = "RGBA";
+                    char const *channelPos = strchr(channelMap, ch);
                     if (!channelPos)
                     {
                         // The format of 'channelSwizzle' is validated when the manifest is loaded,
@@ -1261,8 +1265,8 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
                     if (srcChannelOffset >= image->channels)
                     {
                         fprintf(stderr, "Swizzle '%s' for texture '%s' requests the '%c' channel, which does not exist "
-                            "in the source texture (it only has %d channels).\n",
-                            image->channelSwizzle.c_str(), image->name.c_str(), ch, image->channels);
+                                        "in the source texture (it only has %d channels).\n",
+                                image->channelSwizzle.c_str(), image->name.c_str(), ch, image->channels);
                         return nullptr;
                     }
 
@@ -1272,7 +1276,7 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
                     params.pData = image->data[mip] + srcChannelOffset * bytesPerComponent;
                     params.srcColorSpaces = srcColorSpaces + srcChannelOffset;
                     params.dstColorSpaces = dstColorSpaces + dstChannelOffset;
-                    
+
                     ntcStatus = textureSet->WriteChannels(params);
 
                     // Just check the return code, a failure message will be printed below
@@ -1291,13 +1295,13 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
             if (ntcStatus != ntc::Status::Ok)
             {
                 fprintf(stderr, "Failed to upload texture data to NTC texture set, code = %s\n%s\n",
-                    ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                        ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
                 return nullptr;
             }
         }
-        
-        ntc::ITextureMetadata* texture = textureSet->AddTexture();
-        ManifestEntry const& ment = manifest.textures[image->manifestIndex];
+
+        ntc::ITextureMetadata *texture = textureSet->AddTexture();
+        ManifestEntry const &ment = manifest.textures[image->manifestIndex];
         std::string const metaName = BuildTextureNameWithEmbeddedSemantics(image->name, ment.semantics);
         texture->SetName(metaName.c_str());
         texture->SetChannels(image->firstChannel, image->storedChannels);
@@ -1332,20 +1336,20 @@ ntc::ITextureSet* LoadImages(ntc::IContext* context, Manifest& manifest)
         if (ntcStatus != ntc::Status::Ok)
         {
             fprintf(stderr, "Failed to generate MIP images, code = %s\n%s\n",
-                ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                    ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
             return nullptr;
         }
     }
 
     // Done - detach the "smart" pointer and return the raw one
 
-    ntc::ITextureSet* rawTextureSet = textureSet;
+    ntc::ITextureSet *rawTextureSet = textureSet;
     textureSet.Detach();
 
     return rawTextureSet;
 }
 
-bool CompressTextureSet(ntc::IContext* context, ntc::ITextureSet* textureSet, float* outFinalPsnr)
+bool CompressTextureSet(ntc::IContext *context, ntc::ITextureSet *textureSet, float *outFinalPsnr)
 {
     ntc::Status ntcStatus = textureSet->BeginCompression(g_options.compressionSettings);
     CHECK_NTC_RESULT(BeginCompression);
@@ -1357,7 +1361,7 @@ bool CompressTextureSet(ntc::IContext* context, ntc::ITextureSet* textureSet, fl
         if (ntcStatus == ntc::Status::Incomplete || ntcStatus == ntc::Status::Ok)
         {
             printf("Training: %d steps, %.4f ms/step, intermediate PSNR: %.2f dB\r", stats.currentStep,
-                stats.millisecondsPerStep, ntc::LossToPSNR(stats.loss));
+                   stats.millisecondsPerStep, ntc::LossToPSNR(stats.loss));
             fflush(stdout);
         }
     } while (ntcStatus == ntc::Status::Incomplete);
@@ -1381,7 +1385,7 @@ struct AdaptiveSearchResult
     float psnr = 0.f;
 };
 
-bool CompressTextureSetWithTargetPSNR(ntc::IContext* context, ntc::ITextureSet* textureSet)
+bool CompressTextureSetWithTargetPSNR(ntc::IContext *context, ntc::ITextureSet *textureSet)
 {
     ntc::Status ntcStatus;
 
@@ -1393,9 +1397,9 @@ bool CompressTextureSetWithTargetPSNR(ntc::IContext* context, ntc::ITextureSet* 
     float const maxBitsPerPixel = std::isnan(g_options.maxBitsPerPixel) ? 0.f : g_options.maxBitsPerPixel;
     ntcStatus = session->Reset(targetPsnr, maxBitsPerPixel);
     CHECK_NTC_RESULT("Reset")
-    
+
     printf("Starting search for optimal BPP to achieve %.2f dB PSNR.\n", g_options.targetPsnr);
-    
+
     int experimentCount = 0;
     std::vector<AdaptiveSearchResult> results;
 
@@ -1430,7 +1434,7 @@ bool CompressTextureSetWithTargetPSNR(ntc::IContext* context, ntc::ITextureSet* 
         result.compressedData.resize(bufferSize);
 
         results.push_back(std::move(result));
-        
+
         session->Next(psnr);
         ++experimentCount;
     }
@@ -1444,7 +1448,7 @@ bool CompressTextureSetWithTargetPSNR(ntc::IContext* context, ntc::ITextureSet* 
     }
 
     // Find the final compresison result
-    auto const& result = results[finalIndex];
+    auto const &result = results[finalIndex];
 
     printf("Selected compression rate: %.2f bpp, %.2f dB PSNR.\n", result.bitsPerPixel, result.psnr);
     if (result.psnr < targetPsnr)
@@ -1461,7 +1465,7 @@ bool CompressTextureSetWithTargetPSNR(ntc::IContext* context, ntc::ITextureSet* 
     return true;
 }
 
-bool DecompressTextureSet(ntc::IContext* context, ntc::ITextureSet* textureSet, bool useInt8Weights)
+bool DecompressTextureSet(ntc::IContext *context, ntc::ITextureSet *textureSet, bool useInt8Weights)
 {
     ntc::DecompressionStats stats;
 
@@ -1476,7 +1480,7 @@ bool DecompressTextureSet(ntc::IContext* context, ntc::ITextureSet* textureSet, 
         g_options.inputType == ToolInputType::Images)
     {
         printf("Overall PSNR (%s weights): %.2f dB\n", useInt8Weights ? "INT8" : "FP8", ntc::LossToPSNR(stats.overallLoss));
-        
+
         if (!useInt8Weights)
         {
             size_t maxNameLength = 0;
@@ -1488,7 +1492,7 @@ bool DecompressTextureSet(ntc::IContext* context, ntc::ITextureSet* textureSet, 
             printf("Per-texture PSNR:\n");
             for (int i = 0; i < textureSet->GetTextureCount(); ++i)
             {
-                ntc::ITextureMetadata* texture = textureSet->GetTexture(i);
+                ntc::ITextureMetadata *texture = textureSet->GetTexture(i);
                 int firstChannel, numChannels;
                 texture->GetChannels(firstChannel, numChannels);
 
@@ -1520,10 +1524,10 @@ bool DecompressTextureSet(ntc::IContext* context, ntc::ITextureSet* textureSet, 
     return true;
 }
 
-size_t GetTextureSetPixelCount(ntc::ITextureSet* textureSet)
+size_t GetTextureSetPixelCount(ntc::ITextureSet *textureSet)
 {
     size_t texturePixels = 0;
-    ntc::TextureSetDesc const& desc = textureSet->GetDesc();
+    ntc::TextureSetDesc const &desc = textureSet->GetDesc();
     for (int mip = 0; mip < desc.mips; ++mip)
     {
         int mipWidth = std::max(1, desc.width >> mip);
@@ -1533,15 +1537,15 @@ size_t GetTextureSetPixelCount(ntc::ITextureSet* textureSet)
     return texturePixels;
 }
 
-bool SaveCompressedTextureSet(ntc::IContext* context, ntc::ITextureSet* textureSet)
+bool SaveCompressedTextureSet(ntc::IContext *context, ntc::ITextureSet *textureSet)
 {
     ntc::FileStreamWrapper outputStream(context);
-    
+
     ntc::Status ntcStatus = context->OpenFile(g_options.saveCompressedFileName, true, outputStream.ptr());
     if (ntcStatus != ntc::Status::Ok)
     {
         fprintf(stderr, "Cannot open output file '%s', code = %s\n%s\n",
-            g_options.saveCompressedFileName, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                g_options.saveCompressedFileName, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
         return false;
     }
 
@@ -1553,7 +1557,7 @@ bool SaveCompressedTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
     if (ntcStatus != ntc::Status::Ok)
     {
         fprintf(stderr, "Failed to save compressed texture to output file '%s', code = %s\n%s\n",
-            g_options.saveCompressedFileName, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                g_options.saveCompressedFileName, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
         return false;
     }
 
@@ -1565,43 +1569,42 @@ bool SaveCompressedTextureSet(ntc::IContext* context, ntc::ITextureSet* textureS
     printf("File size: %" PRIu64 " bytes, %.2f bits per pixel.\n", fileSize, bpp);
     if (g_options.losslessCompression.compressBCModeBuffers || g_options.losslessCompression.compressLatents)
     {
-        double const compressedBufferRatioPercents = (losslessStats.originalSizeOfCompressedBuffers == 0) ? 0.0 :
-            100.0 * double(losslessStats.sizeOfCompressedBuffers) / double(losslessStats.originalSizeOfCompressedBuffers);
+        double const compressedBufferRatioPercents = (losslessStats.originalSizeOfCompressedBuffers == 0) ? 0.0 : 100.0 * double(losslessStats.sizeOfCompressedBuffers) / double(losslessStats.originalSizeOfCompressedBuffers);
 
         double const overallCmpressionRatioPercents = 100.0 *
-            double(losslessStats.sizeOfCompressedBuffers + losslessStats.sizeOfUncompressedBuffers) /
-            double(losslessStats.originalSizeOfCompressedBuffers + losslessStats.sizeOfUncompressedBuffers);
+                                                      double(losslessStats.sizeOfCompressedBuffers + losslessStats.sizeOfUncompressedBuffers) /
+                                                      double(losslessStats.originalSizeOfCompressedBuffers + losslessStats.sizeOfUncompressedBuffers);
 
         printf("%s compressed %d buffers out of %d, compressed ratio %.1f%%, overall ratio %.1f%%, time %.2f ms\n",
-            ntc::CompressionTypeToString(g_options.losslessCompression.algorithm),
-            losslessStats.compressedBuffers, losslessStats.totalBuffers,
-            compressedBufferRatioPercents, overallCmpressionRatioPercents, losslessStats.compressionTimeMs);
+               ntc::CompressionTypeToString(g_options.losslessCompression.algorithm),
+               losslessStats.compressedBuffers, losslessStats.totalBuffers,
+               compressedBufferRatioPercents, overallCmpressionRatioPercents, losslessStats.compressionTimeMs);
     }
 
     return true;
 }
 
-ntc::ITextureSet* LoadCompressedTextureSet(ntc::IContext* context)
+ntc::ITextureSet *LoadCompressedTextureSet(ntc::IContext *context)
 {
-    ntc::ITextureSet* textureSet = nullptr;
+    ntc::ITextureSet *textureSet = nullptr;
     ntc::TextureSetFeatures textureSetFeatures;
     textureSetFeatures.enableCompression = false;
     textureSetFeatures.stagingBytesPerPixel = 16;
-    
+
     ntc::Status ntcStatus = context->CreateCompressedTextureSetFromFile(
         g_options.loadCompressedFileName, textureSetFeatures, &textureSet);
 
     if (ntcStatus != ntc::Status::Ok)
     {
         fprintf(stderr, "Failed to load compressed texture from file '%s', code = %s\n%s\n",
-            g_options.loadCompressedFileName, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                g_options.loadCompressedFileName, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
         return nullptr;
     }
-    
+
     return textureSet;
 }
 
-bool DecompressTextureSetWithOptix(ntc::IContext* context, ntc::ITextureSet* textureSet, const char* inputFileName)
+bool DecompressTextureSetWithOptix(ntc::IContext *context, ntc::ITextureSet *textureSet, const char *inputFileName)
 {
 #if NTC_WITH_OPTIX
     ntc::FileStreamWrapper inputStream(context);
@@ -1609,7 +1612,7 @@ bool DecompressTextureSetWithOptix(ntc::IContext* context, ntc::ITextureSet* tex
     if (ntcStatus != ntc::Status::Ok)
     {
         fprintf(stderr, "Failed to open input file '%s', code = %s: %s\n", inputFileName,
-            ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
         return false;
     }
 
@@ -1618,13 +1621,13 @@ bool DecompressTextureSetWithOptix(ntc::IContext* context, ntc::ITextureSet* tex
     if (ntcStatus != ntc::Status::Ok)
     {
         fprintf(stderr, "Failed to load texture set metadata from '%s', code = %s: %s\n", inputFileName,
-            ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
         return false;
     }
 
     OptixDecompressor optixDecompressor(context, metadata.Get(), inputStream.Get());
-    const char* errorMessage = optixDecompressor.prepareDecompression();
-    if( errorMessage )
+    const char *errorMessage = optixDecompressor.prepareDecompression();
+    if (errorMessage)
     {
         fprintf(stderr, "Error. OptiX decompression preparation: %s\n", errorMessage);
         return false;
@@ -1635,10 +1638,10 @@ bool DecompressTextureSetWithOptix(ntc::IContext* context, ntc::ITextureSet* tex
     ntc::TextureSetDesc textureSetDesc = textureSet->GetDesc();
     for (int mipLevel = 0; mipLevel < textureSetDesc.mips; mipLevel++)
     {
-        half* outputImage = reinterpret_cast<half*>(textureSet->GetOutputMipSliceDevicePointer(mipLevel));
+        half *outputImage = reinterpret_cast<half *>(textureSet->GetOutputMipSliceDevicePointer(mipLevel));
         float mipLevelTime = 0.0f;
-        const char* errorMessage = optixDecompressor.DecompressMipLevel(outputImage, mipLevel, mipLevelTime);
-        if( errorMessage )
+        const char *errorMessage = optixDecompressor.DecompressMipLevel(outputImage, mipLevel, mipLevelTime);
+        if (errorMessage)
         {
             fprintf(stderr, "Error. OptiX decompression mip level %d: %s\n", mipLevel, errorMessage);
             return false;
@@ -1667,19 +1670,19 @@ donut::app::DeviceCreationParameters GetGraphicsDeviceParameters(nvrhi::Graphics
     return deviceParams;
 }
 
-void DescribeTextureSet(ntc::ITextureSetMetadata* textureSet)
+void DescribeTextureSet(ntc::ITextureSetMetadata *textureSet)
 {
-    ntc::TextureSetDesc const& desc = textureSet->GetDesc();
+    ntc::TextureSetDesc const &desc = textureSet->GetDesc();
     printf("Dimensions: %dx%d, %d channels, %d mip level(s)\n", desc.width, desc.height, desc.channels, desc.mips);
-    
-    ntc::LatentShape const& latentShape = textureSet->GetLatentShape();
+
+    ntc::LatentShape const &latentShape = textureSet->GetLatentShape();
     printf("Base compression rate: --bitsPerPixel %.3f\n", ntc::GetLatentShapeBitsPerPixel(latentShape));
     printf("Latent shape: --gridSizeScale %d --numFeatures %d\n",
-        latentShape.gridSizeScale, latentShape.numFeatures);
+           latentShape.gridSizeScale, latentShape.numFeatures);
     printf("Inference weights: Int8 [%c], FP8 [%c]\n",
-        textureSet->IsInferenceWeightTypeSupported(ntc::InferenceWeightType::GenericInt8) ? 'Y' : 'N',
-        textureSet->IsInferenceWeightTypeSupported(ntc::InferenceWeightType::GenericFP8) ? 'Y' : 'N');
-    
+           textureSet->IsInferenceWeightTypeSupported(ntc::InferenceWeightType::GenericInt8) ? 'Y' : 'N',
+           textureSet->IsInferenceWeightTypeSupported(ntc::InferenceWeightType::GenericFP8) ? 'Y' : 'N');
+
     ntc::CompressionType latentCompression = ntc::CompressionType::None;
     ntc::LatentTextureDesc const latentTextureDesc = textureSet->GetLatentTextureDesc();
     int totalLatentBuffers = 0;
@@ -1708,11 +1711,11 @@ void DescribeTextureSet(ntc::ITextureSetMetadata* textureSet)
         printf(" (%d/%d slices)", compressedLatentBuffers, totalLatentBuffers);
     }
     printf("\n");
-        
+
     printf("Textures:\n");
     for (int i = 0; i < textureSet->GetTextureCount(); ++i)
     {
-        ntc::ITextureMetadata* texture = textureSet->GetTexture(i);
+        ntc::ITextureMetadata *texture = textureSet->GetTexture(i);
         int firstChannel, numChannels;
         texture->GetChannels(firstChannel, numChannels);
         printf("%d: %s\n", i, texture->GetName());
@@ -1739,7 +1742,8 @@ void DescribeTextureSet(ntc::ITextureSetMetadata* textureSet)
             printf("   Storage color spaces: ");
             for (int ch = 0; ch < numChannels; ++ch)
             {
-                if (ch > 0) printf(", ");
+                if (ch > 0)
+                    printf(", ");
                 printf("%s", ntc::ColorSpaceToString(textureSet->GetChannelStorageColorSpace(firstChannel + ch)));
             }
             printf("\n");
@@ -1767,9 +1771,9 @@ void DescribeTextureSet(ntc::ITextureSetMetadata* textureSet)
                 }
             }
 
-            char const* modeBufferInfo = (totalModeBuffers == 0) ? "None"
-                : (totalModeBuffers == desc.mips) ? "All MIPs"
-                : "Partial";
+            char const *modeBufferInfo = (totalModeBuffers == 0)           ? "None"
+                                         : (totalModeBuffers == desc.mips) ? "All MIPs"
+                                                                           : "Partial";
 
             printf("   BC7 acceleration data: %s", modeBufferInfo);
             if (totalModeBuffers > 0)
@@ -1806,18 +1810,18 @@ static bool ListCudaDevices()
         if (err != cudaSuccess)
         {
             fprintf(stderr, "Call to cudaGetDeviceProperties(%d) failed, error code = %s.\n",
-                device, cudaGetErrorName(err));
+                    device, cudaGetErrorName(err));
             return false;
         }
 
         printf("Device %d: %s (compute capability %d.%d, %zu MB VRAM)\n", device, prop.name,
-            prop.major, prop.minor, prop.totalGlobalMem / (1024 * 1024));
+               prop.major, prop.minor, prop.totalGlobalMem / (1024 * 1024));
     }
 
     return true;
 }
 
-void OverrideBcFormats(ntc::ITextureSetMetadata* textureSetMetadata)
+void OverrideBcFormats(ntc::ITextureSetMetadata *textureSetMetadata)
 {
     for (int textureIndex = 0; textureIndex < textureSetMetadata->GetTextureCount(); ++textureIndex)
     {
@@ -1825,11 +1829,11 @@ void OverrideBcFormats(ntc::ITextureSetMetadata* textureSetMetadata)
     }
 }
 
-bool AnyBlockCompressedTextures(ntc::ITextureSetMetadata* textureSetMetadata)
+bool AnyBlockCompressedTextures(ntc::ITextureSetMetadata *textureSetMetadata)
 {
     for (int textureIndex = 0; textureIndex < textureSetMetadata->GetTextureCount(); ++textureIndex)
     {
-        ntc::ITextureMetadata* textureMetadata = textureSetMetadata->GetTexture(textureIndex);
+        ntc::ITextureMetadata *textureMetadata = textureSetMetadata->GetTexture(textureIndex);
         if (textureMetadata->GetBlockCompressedFormat() != ntc::BlockCompressedFormat::None)
         {
             return true;
@@ -1841,15 +1845,15 @@ bool AnyBlockCompressedTextures(ntc::ITextureSetMetadata* textureSetMetadata)
 class CustomAllocator : public ntc::IAllocator
 {
 public:
-    void* Allocate(size_t size) override
+    void *Allocate(size_t size) override
     {
-        void* ptr = malloc(size);
+        void *ptr = malloc(size);
         // printf("Allocating %zu bytes at %p.\n", size, ptr);
         m_bytesAllocated += size;
         return ptr;
     }
 
-    void Deallocate(void* ptr, size_t size) override
+    void Deallocate(void *ptr, size_t size) override
     {
         if (!ptr)
             return;
@@ -1867,27 +1871,25 @@ private:
     int64_t m_bytesAllocated = 0;
 };
 
-
-int main(int argc, const char** argv)
+int main(int argc, const char **argv)
 {
     donut::log::ConsoleApplicationMode();
     donut::log::SetMinSeverity(donut::log::Severity::Warning);
 
     if (!ProcessCommandLine(argc, argv))
         return 1;
-    
+
     if (g_options.printVersion)
     {
         ntc::VersionInfo libVersion = ntc::GetLibraryVersion();
         printf("LibNTC version: %d.%d.%d %s-%s\n", libVersion.major, libVersion.minor, libVersion.point,
-            libVersion.branch, libVersion.commitHash);
+               libVersion.branch, libVersion.commitHash);
 
         ntc::VersionInfo sdkVersion = GetNtcSdkVersion();
         printf("Tools version:  %s-%s\n", sdkVersion.branch, sdkVersion.commitHash);
 
         return 0;
     }
-
 
     if (g_options.listCudaDevices)
     {
@@ -1899,13 +1901,13 @@ int main(int argc, const char** argv)
 
     bool const useGapi = g_options.useVulkan || g_options.useDX12;
 
-    bool const graphicsDecompressMode = g_options.inputType == ToolInputType::CompressedTextureSet && useGapi 
-        && g_options.decompress && !g_options.optimizeBC;
+    bool const graphicsDecompressMode = g_options.inputType == ToolInputType::CompressedTextureSet && useGapi && g_options.decompress && !g_options.optimizeBC;
 
-    bool const describeMode = g_options.inputType == ToolInputType::CompressedTextureSet && g_options.describe
-        && !g_options.decompress && !g_options.saveCompressedFileName;
+    bool const describeMode = g_options.inputType == ToolInputType::CompressedTextureSet && g_options.describe && !g_options.decompress && !g_options.saveCompressedFileName;
 
-    bool const useCuda = !describeMode && !graphicsDecompressMode;
+    bool const probeMode = g_options.inputType == ToolInputType::CompressedTextureSet && g_options.probeInferenceWeights;
+
+    bool const useCuda = !describeMode && !graphicsDecompressMode && !probeMode;
 
     cudaDeviceProp cudaDeviceProperties{};
     if (g_options.cudaDevice >= 0 && useCuda)
@@ -1918,14 +1920,14 @@ int main(int argc, const char** argv)
             if (err != cudaSuccess)
             {
                 fprintf(stderr, "Call to cudaGetDeviceProperties(%d) failed, error code = %s.\n",
-                    g_options.cudaDevice, cudaGetErrorName(err));
+                        g_options.cudaDevice, cudaGetErrorName(err));
             }
         }
     }
 
     CustomAllocator customAllocator;
 
-    typedef std::unique_ptr<donut::app::DeviceManager, void(*)(donut::app::DeviceManager*)> DeviceManagerPtr;
+    typedef std::unique_ptr<donut::app::DeviceManager, void (*)(donut::app::DeviceManager *)> DeviceManagerPtr;
     DeviceManagerPtr deviceManager = DeviceManagerPtr(nullptr, nullptr);
     nvrhi::DeviceHandle device;
     nvrhi::CommandListHandle commandList;
@@ -1937,16 +1939,16 @@ int main(int argc, const char** argv)
         using namespace donut::app;
 
         nvrhi::GraphicsAPI const graphicsApi = g_options.useVulkan
-            ? nvrhi::GraphicsAPI::VULKAN
-            : nvrhi::GraphicsAPI::D3D12;
-        
+                                                   ? nvrhi::GraphicsAPI::VULKAN
+                                                   : nvrhi::GraphicsAPI::D3D12;
+
         // Create a device manager, wrap it with unique_ptr and a custom deleter that calls Shutdown.
-        deviceManager = std::unique_ptr<DeviceManager, void(*)(DeviceManager*)>(DeviceManager::Create(graphicsApi), 
-            [](DeviceManager* dm) {
-                dm->Shutdown();
-                delete dm;
-            }
-        );
+        deviceManager = std::unique_ptr<DeviceManager, void (*)(DeviceManager *)>(DeviceManager::Create(graphicsApi),
+                                                                                  [](DeviceManager *dm)
+                                                                                  {
+                                                                                      dm->Shutdown();
+                                                                                      delete dm;
+                                                                                  });
 
         DeviceCreationParameters deviceParams = GetGraphicsDeviceParameters(graphicsApi);
 
@@ -1967,7 +1969,7 @@ int main(int argc, const char** argv)
         {
             for (int adapterIndex = 0; adapterIndex < int(adapters.size()); ++adapterIndex)
             {
-                auto const& info = adapters[adapterIndex];
+                auto const &info = adapters[adapterIndex];
                 int deviceMemoryMB = int(info.dedicatedVideoMemory / (1024 * 1024));
                 printf("Adapter %d: %s (%d MB VRAM)\n", adapterIndex, info.name.c_str(), deviceMemoryMB);
             }
@@ -1981,13 +1983,13 @@ int main(int argc, const char** argv)
         {
             for (int adapterIndex = 0; adapterIndex < int(adapters.size()); ++adapterIndex)
             {
-                donut::app::AdapterInfo const& adapter = adapters[adapterIndex];
+                donut::app::AdapterInfo const &adapter = adapters[adapterIndex];
 
                 static_assert(sizeof(donut::app::AdapterInfo::UUID) == sizeof(cudaDeviceProperties.uuid));
                 static_assert(sizeof(donut::app::AdapterInfo::LUID) == sizeof(cudaDeviceProperties.luid));
 
                 if (adapter.uuid.has_value() && !memcmp(adapter.uuid->data(), cudaDeviceProperties.uuid.bytes, sizeof(cudaDeviceProperties.uuid)) ||
-                    adapter.luid.has_value() && !memcmp(adapter.luid->data(), cudaDeviceProperties.luid, sizeof(cudaDeviceProperties.luid)) )
+                    adapter.luid.has_value() && !memcmp(adapter.luid->data(), cudaDeviceProperties.luid, sizeof(cudaDeviceProperties.luid)))
                 {
                     deviceParams.adapterIndex = adapterIndex;
                     break;
@@ -1997,7 +1999,7 @@ int main(int argc, const char** argv)
             if (deviceParams.adapterIndex < 0)
             {
                 printf("Warning: Couldn't find a matching %s adapter for the selected CUDA device %d (%s).\n",
-                    nvrhi::utils::GraphicsAPIToString(graphicsApi), g_options.cudaDevice, cudaDeviceProperties.name);
+                       nvrhi::utils::GraphicsAPIToString(graphicsApi), g_options.cudaDevice, cudaDeviceProperties.name);
             }
         }
 
@@ -2020,12 +2022,12 @@ int main(int argc, const char** argv)
     ntc::ContextParameters contextParams;
     contextParams.pAllocator = &customAllocator;
     contextParams.cudaDevice = useCuda ? g_options.cudaDevice : ntc::DisableCudaDevice;
-    
+
     if (deviceManager)
     {
         ntc::GraphicsAPI const ntcGapi = deviceManager->GetGraphicsAPI() == nvrhi::GraphicsAPI::D3D12
-            ? ntc::GraphicsAPI::D3D12
-            : ntc::GraphicsAPI::Vulkan;
+                                             ? ntc::GraphicsAPI::D3D12
+                                             : ntc::GraphicsAPI::Vulkan;
 
         bool const osSupportsCoopVec = (ntcGapi == ntc::GraphicsAPI::D3D12) ? IsDX12DeveloperModeEnabled() : true;
 
@@ -2042,13 +2044,13 @@ int main(int argc, const char** argv)
     if (ntcStatus != ntc::Status::Ok && !(ntcStatus == ntc::Status::CudaUnavailable && !useCuda))
     {
         fprintf(stderr, "Failed to create an NTC context, code = %s: %s\n",
-            ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
         if (ntcStatus == ntc::Status::CudaUnavailable)
         {
             fprintf(stderr, "\n"
-                "For decompression of NTC texture sets on GPUs that do not support CUDA, "
-                "please use --vk or --dx12 (where available).\n"
-                "All other image processing operations require CUDA.\n");
+                            "For decompression of NTC texture sets on GPUs that do not support CUDA, "
+                            "please use --vk or --dx12 (where available).\n"
+                            "All other image processing operations require CUDA.\n");
         }
         return 1;
     }
@@ -2056,19 +2058,19 @@ int main(int argc, const char** argv)
     if (cudaDeviceProperties.major > 0 && ntcStatus != ntc::Status::CudaUnavailable)
     {
         printf("Using %s with CUDA API. Compute capability %d.%d\n",
-            cudaDeviceProperties.name, cudaDeviceProperties.major, cudaDeviceProperties.minor);
+               cudaDeviceProperties.name, cudaDeviceProperties.major, cudaDeviceProperties.minor);
     }
 
     if (useGapi)
     {
         printf("Using %s with %s API. CoopVec [%c], GDeflate [%c]\n",
-            deviceManager->GetRendererString(),
-            nvrhi::utils::GraphicsAPIToString(deviceManager->GetGraphicsAPI()),
-            context->IsCooperativeVectorSupported() ? 'Y' : 'N',
-            gdeflateFeatures && gdeflateFeatures->gpuDecompressionSupported ? 'Y' : 'N');
+               deviceManager->GetRendererString(),
+               nvrhi::utils::GraphicsAPIToString(deviceManager->GetGraphicsAPI()),
+               context->IsCooperativeVectorSupported() ? 'Y' : 'N',
+               gdeflateFeatures && gdeflateFeatures->gpuDecompressionSupported ? 'Y' : 'N');
     }
 
-    if (graphicsDecompressMode || describeMode)
+    if (graphicsDecompressMode || describeMode || probeMode)
     {
         assert(g_options.loadCompressedFileName); // parseCommandLine checks this condition, but let's be sure...
 
@@ -2077,7 +2079,7 @@ int main(int argc, const char** argv)
         if (ntcStatus != ntc::Status::Ok)
         {
             fprintf(stderr, "Failed to open input file '%s', code = %s: %s\n", g_options.loadCompressedFileName,
-                ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                    ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
             return 1;
         }
 
@@ -2086,7 +2088,7 @@ int main(int argc, const char** argv)
         if (ntcStatus != ntc::Status::Ok)
         {
             fprintf(stderr, "Failed to load texture set metadata from '%s', code = %s: %s\n", g_options.loadCompressedFileName,
-                ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                    ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
             return 1;
         }
 
@@ -2095,6 +2097,45 @@ int main(int argc, const char** argv)
         if (g_options.describe)
         {
             DescribeTextureSet(metadata);
+        }
+
+        if (probeMode)
+        {
+            ntc::InferenceWeightType const weightType = ntc::InferenceWeightType::CoopVecFP8;
+
+            bool const supported = metadata->IsInferenceWeightTypeSupported(weightType);
+            printf("IsInferenceWeightTypeSupported(CoopVecFP8) = %s\n", supported ? "true" : "false");
+            if (!supported)
+            {
+                fprintf(stderr, "PROBE FAILED: CoopVecFP8 not supported for this texture set on this device.\n");
+                return 1;
+            }
+
+            void const *pWeightData = nullptr;
+            size_t uploadSize = 0;
+            size_t convertedSize = 0;
+            ntcStatus = metadata->GetInferenceWeights(weightType, &pWeightData, &uploadSize, &convertedSize);
+            if (ntcStatus != ntc::Status::Ok)
+            {
+                fprintf(stderr, "PROBE FAILED: GetInferenceWeights returned %s: %s\n",
+                        ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                return 1;
+            }
+            printf("GetInferenceWeights OK: uploadSize=%zu bytes, convertedSize=%zu bytes\n",
+                   uploadSize, convertedSize);
+
+            ntc::InferenceData inferenceData{};
+            ntcStatus = context->MakeInferenceData(metadata, weightType, 0, &inferenceData);
+            if (ntcStatus != ntc::Status::Ok)
+            {
+                fprintf(stderr, "PROBE FAILED: MakeInferenceData returned %s: %s\n",
+                        ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                return 1;
+            }
+            printf("MakeInferenceData OK\n");
+
+            printf("PROBE PASSED\n");
+            return 0;
         }
 
         if (describeMode)
@@ -2113,16 +2154,16 @@ int main(int argc, const char** argv)
             fprintf(stderr, "GraphicsDecompressionPass::Init failed.\n");
             return 1;
         }
-        
+
         std::vector<float> iterationTimes;
         iterationTimes.resize(g_options.benchmarkIterations);
 
         for (int iteration = 0; iteration < g_options.benchmarkIterations; ++iteration)
         {
             bool const decompressSucceeded = DecompressTextureSetWithGraphicsAPI(device, commandList,
-                timerQuery, gdp, gdeflateFeatures.get(),
-                context, metadata, iteration == 0 ? inputFile.Get() : nullptr, mipLevels, g_options.enableDithering,
-                graphicsResources);
+                                                                                 timerQuery, gdp, gdeflateFeatures.get(),
+                                                                                 context, metadata, iteration == 0 ? inputFile.Get() : nullptr, mipLevels, g_options.enableDithering,
+                                                                                 graphicsResources);
 
             if (!decompressSucceeded)
                 return 1;
@@ -2133,12 +2174,12 @@ int main(int argc, const char** argv)
             float const decompressTimeSeconds = device->getTimerQueryTime(timerQuery);
             iterationTimes[iteration] = decompressTimeSeconds;
         }
-        
+
         if (g_options.benchmarkIterations > 1)
         {
             float const medianDecompressionTime = Median(iterationTimes);
             printf("Median decompression time over %d iterations: %.3f ms\n", g_options.benchmarkIterations,
-                medianDecompressionTime * 1e3f);
+                   medianDecompressionTime * 1e3f);
         }
 
         bool const anyBCTextures = AnyBlockCompressedTextures(metadata);
@@ -2148,13 +2189,13 @@ int main(int argc, const char** argv)
             if (anyBCTextures)
             {
                 if (!BlockCompressAndSaveGraphicsTextures(context, metadata, inputFile.Get(),
-                    device, commandList, timerQuery, gdeflateFeatures.get(),
-                    g_options.saveImagesPath, g_options.benchmarkIterations, graphicsResources))
+                                                          device, commandList, timerQuery, gdeflateFeatures.get(),
+                                                          g_options.saveImagesPath, g_options.benchmarkIterations, graphicsResources))
                     return 1;
             }
 
             if (!SaveGraphicsStagingTextures(metadata, device, g_options.saveImagesPath, g_options.imageFormat,
-                g_options.saveMips, graphicsResources))
+                                             g_options.saveMips, graphicsResources))
                 return 1;
         }
     }
@@ -2165,61 +2206,66 @@ int main(int argc, const char** argv)
         Manifest manifest;
         switch (g_options.inputType)
         {
-            case ToolInputType::Directory: {
-                assert(g_options.loadImagesPath);
+        case ToolInputType::Directory:
+        {
+            assert(g_options.loadImagesPath);
 
-                GenerateManifestFromDirectory(g_options.loadImagesPath, g_options.loadMips, g_options.keepFileNames, manifest);
-                *textureSet.ptr() = LoadImages(context, manifest);
-                break;
-            }
-            case ToolInputType::Images: {
-                assert(!g_options.loadImagesList.empty());
+            GenerateManifestFromDirectory(g_options.loadImagesPath, g_options.loadMips, g_options.keepFileNames, manifest);
+            *textureSet.ptr() = LoadImages(context, manifest);
+            break;
+        }
+        case ToolInputType::Images:
+        {
+            assert(!g_options.loadImagesList.empty());
 
-                GenerateManifestFromFileList(g_options.loadImagesList, g_options.keepFileNames, manifest);
-                *textureSet.ptr() = LoadImages(context, manifest);
-                break;
-            }
-            case ToolInputType::ManifestFile: {
-                assert(g_options.loadManifestFileName);
+            GenerateManifestFromFileList(g_options.loadImagesList, g_options.keepFileNames, manifest);
+            *textureSet.ptr() = LoadImages(context, manifest);
+            break;
+        }
+        case ToolInputType::ManifestFile:
+        {
+            assert(g_options.loadManifestFileName);
 
-                std::string manifestError;
-                if (!ReadManifestFromFile(g_options.loadManifestFileName, manifest, manifestError))
-                {
-                    fprintf(stderr, "%s\n", manifestError.c_str());
-                    return 1;
-                }
-
-                *textureSet.ptr() = LoadImages(context, manifest);
-                break;
-            }
-            case ToolInputType::ManifestStdin: {
-                std::string manifestError;
-                if (!ReadManifestFromStdin(manifest, manifestError))
-                {
-                    fprintf(stderr, "%s\n", manifestError.c_str());
-                    return 1;
-                }
-
-                *textureSet.ptr() = LoadImages(context, manifest);
-                break;
-            }
-            case ToolInputType::CompressedTextureSet: {
-                assert(g_options.loadCompressedFileName);
-
-                *textureSet.ptr() = LoadCompressedTextureSet(context);
-                
-                if (textureSet)
-                {
-                    // LoadImages already applies overrides to the texture set and the manifest,
-                    // so process the overrides here for the case of loading a compressed texture set.
-                    OverrideBcFormats(textureSet);
-                }
-
-                break;
-            }
-            default:
-                assert(!"Unsupported input type!");
+            std::string manifestError;
+            if (!ReadManifestFromFile(g_options.loadManifestFileName, manifest, manifestError))
+            {
+                fprintf(stderr, "%s\n", manifestError.c_str());
                 return 1;
+            }
+
+            *textureSet.ptr() = LoadImages(context, manifest);
+            break;
+        }
+        case ToolInputType::ManifestStdin:
+        {
+            std::string manifestError;
+            if (!ReadManifestFromStdin(manifest, manifestError))
+            {
+                fprintf(stderr, "%s\n", manifestError.c_str());
+                return 1;
+            }
+
+            *textureSet.ptr() = LoadImages(context, manifest);
+            break;
+        }
+        case ToolInputType::CompressedTextureSet:
+        {
+            assert(g_options.loadCompressedFileName);
+
+            *textureSet.ptr() = LoadCompressedTextureSet(context);
+
+            if (textureSet)
+            {
+                // LoadImages already applies overrides to the texture set and the manifest,
+                // so process the overrides here for the case of loading a compressed texture set.
+                OverrideBcFormats(textureSet);
+            }
+
+            break;
+        }
+        default:
+            assert(!"Unsupported input type!");
+            return 1;
         }
 
         if (!textureSet)
@@ -2234,7 +2280,7 @@ int main(int argc, const char** argv)
         {
             std::string manifestError;
             if (!WriteManifestToFile(g_options.saveManifestFileName, manifest, manifestError,
-                    g_options.writeManifestSemanticsJson))
+                                     g_options.writeManifestSemanticsJson))
             {
                 fprintf(stderr, "%s\n", manifestError.c_str());
                 return 1;
@@ -2263,34 +2309,34 @@ int main(int argc, const char** argv)
             if (!device)
             {
                 fprintf(stderr, "BCn encoding requires either --vk or --dx12 (where available).\n"
-                    "To save images in a non-BC format, use --bcFormat none.\n");
+                                "To save images in a non-BC format, use --bcFormat none.\n");
                 return 1;
             }
 
             int const mipLevels = textureSet->GetDesc().mips;
 
             if (!CreateGraphicsResourcesFromMetadata(context, device, textureSet,
-                mipLevels, /* enableCudaSharing = */ true, graphicsResources))
+                                                     mipLevels, /* enableCudaSharing = */ true, graphicsResources))
                 return 1;
         }
 
         if (g_options.matchBcPsnr)
         {
             if (!CopyTextureSetDataIntoGraphicsTextures(context, textureSet, ntc::TextureDataPage::Reference,
-                /* allMipLevels = */ false, /* onlyBlockCompressedFormats = */ true, graphicsResources))
+                                                        /* allMipLevels = */ false, /* onlyBlockCompressedFormats = */ true, graphicsResources))
                 return 1;
 
             if (!ComputePsnrForBlockCompressedTextureSet(context, textureSet, device,
-                commandList, graphicsResources, g_options.targetPsnr))
+                                                         commandList, graphicsResources, g_options.targetPsnr))
                 return 1;
 
             // Apply the user-specified offset and limits
             g_options.targetPsnr = std::min(g_options.maxBcPsnr, std::max(g_options.minBcPsnr,
-                g_options.targetPsnr + g_options.bcPsnrOffset));
+                                                                          g_options.targetPsnr + g_options.bcPsnrOffset));
 
             printf("Selected target PSNR: %.2f dB.\n", g_options.targetPsnr);
         }
-        
+
         if (g_options.compress)
         {
             if (std::isnan(g_options.targetPsnr))
@@ -2319,25 +2365,25 @@ int main(int argc, const char** argv)
 
         if (g_options.decompress && g_options.useOptix && g_options.loadCompressedFileName)
         {
-            if( !DecompressTextureSetWithOptix(context, textureSet, g_options.loadCompressedFileName) )
+            if (!DecompressTextureSetWithOptix(context, textureSet, g_options.loadCompressedFileName))
                 return 1;
         }
 
         if (g_options.optimizeBC || g_options.saveImagesPath && anyBCTextures)
         {
             ntc::TextureDataPage const sourcePage = g_options.decompress
-                ? ntc::TextureDataPage::Output
-                : ntc::TextureDataPage::Reference;
-                
+                                                        ? ntc::TextureDataPage::Output
+                                                        : ntc::TextureDataPage::Reference;
+
             if (!CopyTextureSetDataIntoGraphicsTextures(context, textureSet, sourcePage,
-                /* allMipLevels = */ true, /* onlyBlockCompressedFormats = */ true, graphicsResources))
+                                                        /* allMipLevels = */ true, /* onlyBlockCompressedFormats = */ true, graphicsResources))
                 return 1;
         }
 
         if (g_options.optimizeBC)
         {
             if (!OptimizeBlockCompression(context, textureSet, device,
-                commandList, g_options.bcPsnrThreshold, graphicsResources))
+                                          commandList, g_options.bcPsnrThreshold, graphicsResources))
                 return 1;
         }
 
@@ -2346,11 +2392,11 @@ int main(int argc, const char** argv)
             if (anyBCTextures)
             {
                 if (!BlockCompressAndSaveGraphicsTextures(context, textureSet, nullptr,
-                    device, commandList, timerQuery, gdeflateFeatures.get(),
-                    g_options.saveImagesPath, g_options.benchmarkIterations, graphicsResources))
+                                                          device, commandList, timerQuery, gdeflateFeatures.get(),
+                                                          g_options.saveImagesPath, g_options.benchmarkIterations, graphicsResources))
                     return 1;
             }
-                
+
             if (!SaveImagesFromTextureSet(context, textureSet))
                 return 1;
         }
@@ -2364,7 +2410,7 @@ int main(int argc, const char** argv)
         {
             size_t estimatedSize;
             if (ntc::EstimateCompressedTextureSetSize(textureSet->GetDesc(), textureSet->GetLatentShape(),
-                estimatedSize) == ntc::Status::Ok)
+                                                      estimatedSize) == ntc::Status::Ok)
             {
                 size_t const texturePixels = GetTextureSetPixelCount(textureSet);
                 float const bpp = 8.f * float(estimatedSize) / float(texturePixels);
