@@ -11,6 +11,7 @@
  */
 
 #include <argparse.h>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
 #include <cuda_runtime_api.h>
@@ -2204,6 +2205,8 @@ int main(int argc, const char **argv)
                 return 1;
             }
 
+            auto const conversionStart = std::chrono::high_resolution_clock::now();
+
             commandList->open();
             commandList->writeBuffer(srcBuffer, pWeightData, uploadSize);
 
@@ -2241,6 +2244,11 @@ int main(int argc, const char **argv)
             commandList->close();
             device->executeCommandList(commandList);
             device->waitForIdle();
+
+            auto const conversionEnd = std::chrono::high_resolution_clock::now();
+            double const conversionMs = std::chrono::duration<double, std::milli>(
+                                            conversionEnd - conversionStart)
+                                            .count();
 
             void const *pConverted = device->mapBuffer(stagingBuffer, nvrhi::CpuAccessMode::Read);
             if (!pConverted)
@@ -2301,24 +2309,52 @@ int main(int argc, const char **argv)
                         return 1;
                     }
 
-                    if (footprint.buffer.compressionType != ntc::CompressionType::None)
-                    {
-                        fprintf(stderr, "DUMP FAILED: latent subresource (mip=%d, layer=%d) is "
-                                        "GDeflate-compressed in the stream; raw read would dump "
-                                        "compressed bytes, not latents. Re-save with --gdeflate=none "
-                                        "or extend this dumper to call DecompressGDeflate*.\n",
-                                mip, layer);
-                        return 1;
-                    }
-
                     size_t const byteOffset = latentBytes.size();
-                    size_t const byteSize = footprint.buffer.rangeInStream.size;
-                    latentBytes.resize(byteOffset + byteSize);
-                    if (!inputFile->Seek(footprint.buffer.rangeInStream.offset) ||
-                        !inputFile->Read(latentBytes.data() + byteOffset, byteSize))
+                    size_t byteSize = 0;
+
+                    if (footprint.buffer.compressionType == ntc::CompressionType::None)
                     {
-                        fprintf(stderr, "DUMP FAILED: could not read latent subresource "
-                                        "(mip=%d, layer=%d) from stream.\n",
+                        byteSize = footprint.buffer.rangeInStream.size;
+                        latentBytes.resize(byteOffset + byteSize);
+                        if (!inputFile->Seek(footprint.buffer.rangeInStream.offset) ||
+                            !inputFile->Read(latentBytes.data() + byteOffset, byteSize))
+                        {
+                            fprintf(stderr, "DUMP FAILED: could not read latent subresource "
+                                            "(mip=%d, layer=%d) from stream.\n",
+                                    mip, layer);
+                            return 1;
+                        }
+                    }
+                    else if (footprint.buffer.compressionType == ntc::CompressionType::GDeflate)
+                    {
+                        std::vector<uint8_t> compressedData(footprint.buffer.rangeInStream.size);
+                        if (!inputFile->Seek(footprint.buffer.rangeInStream.offset) ||
+                            !inputFile->Read(compressedData.data(), compressedData.size()))
+                        {
+                            fprintf(stderr, "DUMP FAILED: could not read compressed latent "
+                                            "subresource (mip=%d, layer=%d) from stream.\n",
+                                    mip, layer);
+                            return 1;
+                        }
+
+                        byteSize = footprint.buffer.uncompressedSize;
+                        latentBytes.resize(byteOffset + byteSize);
+                        ntcStatus = context->DecompressBuffer(ntc::CompressionType::GDeflate,
+                                                              compressedData.data(), compressedData.size(),
+                                                              latentBytes.data() + byteOffset, byteSize,
+                                                              footprint.buffer.uncompressedCrc32);
+                        if (ntcStatus != ntc::Status::Ok)
+                        {
+                            fprintf(stderr, "DUMP FAILED: DecompressBuffer for latent subresource "
+                                            "(mip=%d, layer=%d) returned %s: %s\n",
+                                    mip, layer, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                            return 1;
+                        }
+                    }
+                    else
+                    {
+                        fprintf(stderr, "DUMP FAILED: latent subresource (mip=%d, layer=%d) uses an "
+                                        "unsupported compression type.\n",
                                 mip, layer);
                         return 1;
                     }
@@ -2357,6 +2393,8 @@ int main(int argc, const char **argv)
                    convertedSize, sizeof(inferenceData.constants), latentBytes.size(),
                    latentDesc.width, latentDesc.height, latentDesc.arraySize, latentDesc.mipLevels,
                    outDir.string().c_str());
+            printf("Weight conversion time: %.3f ms (one-time, offline; upload+ConvertInferenceWeights+readback)\n",
+                   conversionMs);
             return 0;
         }
 
