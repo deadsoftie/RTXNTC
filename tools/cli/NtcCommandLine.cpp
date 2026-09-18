@@ -16,6 +16,7 @@
 #include <cuda_runtime_api.h>
 #include <donut/app/DeviceManager.h>
 #include <filesystem>
+#include <json/json.h>
 #include <libntc/ntc.h>
 #include <ntc-utils/DeviceUtils.h>
 #include <ntc-utils/GraphicsDecompressionPass.h>
@@ -63,6 +64,7 @@ struct
     bool listCudaDevices = false;
     bool describe = false;
     bool probeInferenceWeights = false;
+    const char *dumpInferenceDataPath = nullptr;
     bool discardMaskedOutPixels = false;
     bool enableCoopVec = true;
     bool enableGpuDeflate = false;
@@ -105,6 +107,10 @@ bool ProcessCommandLine(int argc, const char **argv)
                     "Project 4 Stage C, Phase C0 check #1: query CoopVecFP8 inference-weight support and "
                     "availability for a --loadCompressed texture set (IsInferenceWeightTypeSupported, "
                     "GetInferenceWeights, MakeInferenceData) without decompressing anything"),
+        OPT_STRING(0, "dumpInferenceData", &g_options.dumpInferenceDataPath,
+                   "Project 4 Stage C, Phase C1: convert CoopVecFP8 inference weights on the GPU and dump "
+                   "weights.bin, constants.bin, latents.bin for a --loadCompressed texture set into the "
+                   "specified directory"),
         OPT_BOOLEAN('g', "generateMips", &g_options.generateMips, "Generate MIP level images before compression"),
         OPT_STRING(0, "loadCompressed", &g_options.loadCompressedFileName, "Load compressed texture set from the specified file"),
         OPT_STRING(0, "loadImages", &g_options.loadImagesPath, "Load channel images from the specified folder"),
@@ -1907,7 +1913,9 @@ int main(int argc, const char **argv)
 
     bool const probeMode = g_options.inputType == ToolInputType::CompressedTextureSet && g_options.probeInferenceWeights;
 
-    bool const useCuda = !describeMode && !graphicsDecompressMode && !probeMode;
+    bool const dumpMode = g_options.inputType == ToolInputType::CompressedTextureSet && g_options.dumpInferenceDataPath != nullptr;
+
+    bool const useCuda = !describeMode && !graphicsDecompressMode && !probeMode && !dumpMode;
 
     cudaDeviceProp cudaDeviceProperties{};
     if (g_options.cudaDevice >= 0 && useCuda)
@@ -2070,7 +2078,7 @@ int main(int argc, const char **argv)
                gdeflateFeatures && gdeflateFeatures->gpuDecompressionSupported ? 'Y' : 'N');
     }
 
-    if (graphicsDecompressMode || describeMode || probeMode)
+    if (graphicsDecompressMode || describeMode || probeMode || dumpMode)
     {
         assert(g_options.loadCompressedFileName); // parseCommandLine checks this condition, but let's be sure...
 
@@ -2135,6 +2143,220 @@ int main(int argc, const char **argv)
             printf("MakeInferenceData OK\n");
 
             printf("PROBE PASSED\n");
+            return 0;
+        }
+
+        if (dumpMode)
+        {
+            ntc::InferenceWeightType const weightType = ntc::InferenceWeightType::CoopVecFP8;
+
+            if (!metadata->IsInferenceWeightTypeSupported(weightType))
+            {
+                fprintf(stderr, "DUMP FAILED: CoopVecFP8 not supported for this texture set on this device.\n");
+                return 1;
+            }
+
+            void const *pWeightData = nullptr;
+            size_t uploadSize = 0;
+            size_t convertedSize = 0;
+            ntcStatus = metadata->GetInferenceWeights(weightType, &pWeightData, &uploadSize, &convertedSize);
+            if (ntcStatus != ntc::Status::Ok)
+            {
+                fprintf(stderr, "DUMP FAILED: GetInferenceWeights returned %s: %s\n",
+                        ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                return 1;
+            }
+
+            ntc::InferenceData inferenceData{};
+            ntcStatus = context->MakeInferenceData(metadata, weightType, 0, &inferenceData);
+            if (ntcStatus != ntc::Status::Ok)
+            {
+                fprintf(stderr, "DUMP FAILED: MakeInferenceData returned %s: %s\n",
+                        ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                return 1;
+            }
+
+            nvrhi::BufferHandle srcBuffer = device->createBuffer(nvrhi::BufferDesc()
+                                                                     .setByteSize(uploadSize)
+                                                                     .setDebugName("NTC weights upload (dump)")
+                                                                     .setCanHaveRawViews(true)
+                                                                     .setInitialState(nvrhi::ResourceStates::CopyDest)
+                                                                     .setKeepInitialState(true));
+
+            nvrhi::BufferHandle dstBuffer = device->createBuffer(nvrhi::BufferDesc()
+                                                                     .setByteSize(convertedSize)
+                                                                     .setDebugName("NTC weights converted (dump)")
+                                                                     .setCanHaveRawViews(true)
+                                                                     .setCanHaveUAVs(true)
+                                                                     .setInitialState(nvrhi::ResourceStates::UnorderedAccess)
+                                                                     .setKeepInitialState(true));
+
+            nvrhi::BufferHandle stagingBuffer = device->createBuffer(nvrhi::BufferDesc()
+                                                                         .setByteSize(convertedSize)
+                                                                         .setDebugName("NTC weights staging (dump)")
+                                                                         .setCpuAccess(nvrhi::CpuAccessMode::Read)
+                                                                         .setInitialState(nvrhi::ResourceStates::CopyDest)
+                                                                         .setKeepInitialState(true));
+
+            if (!srcBuffer || !dstBuffer || !stagingBuffer)
+            {
+                fprintf(stderr, "DUMP FAILED: buffer creation failed.\n");
+                return 1;
+            }
+
+            commandList->open();
+            commandList->writeBuffer(srcBuffer, pWeightData, uploadSize);
+
+            bool const isVulkan = deviceManager->GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+            nvrhi::ObjectType const nativeCommandListType = isVulkan
+                                                                ? nvrhi::ObjectTypes::VK_CommandBuffer
+                                                                : nvrhi::ObjectTypes::D3D12_GraphicsCommandList;
+            nvrhi::ObjectType const nativeBufferType = isVulkan
+                                                           ? nvrhi::ObjectTypes::VK_Buffer
+                                                           : nvrhi::ObjectTypes::D3D12_Resource;
+
+            // ConvertInferenceWeights is a raw native-API call that bypasses NVRHI's
+            // own resource-state tracking, so these two buffers need an explicit
+            // transition right before it, same as the reference sample does.
+            commandList->setBufferState(srcBuffer, nvrhi::ResourceStates::ShaderResource);
+            commandList->setBufferState(dstBuffer, nvrhi::ResourceStates::UnorderedAccess);
+            commandList->commitBarriers();
+
+            void *nativeCommandList = commandList->getNativeObject(nativeCommandListType);
+            void *nativeSrcBuffer = srcBuffer->getNativeObject(nativeBufferType);
+            void *nativeDstBuffer = dstBuffer->getNativeObject(nativeBufferType);
+
+            ntcStatus = metadata->ConvertInferenceWeights(weightType, nativeCommandList,
+                                                          nativeSrcBuffer, 0, nativeDstBuffer, 0);
+            if (ntcStatus != ntc::Status::Ok)
+            {
+                fprintf(stderr, "DUMP FAILED: ConvertInferenceWeights returned %s: %s\n",
+                        ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                return 1;
+            }
+
+            commandList->setBufferState(dstBuffer, nvrhi::ResourceStates::CopySource);
+            commandList->commitBarriers();
+            commandList->copyBuffer(stagingBuffer, 0, dstBuffer, 0, convertedSize);
+            commandList->close();
+            device->executeCommandList(commandList);
+            device->waitForIdle();
+
+            void const *pConverted = device->mapBuffer(stagingBuffer, nvrhi::CpuAccessMode::Read);
+            if (!pConverted)
+            {
+                fprintf(stderr, "DUMP FAILED: mapBuffer failed.\n");
+                return 1;
+            }
+
+            fs::path outDir(g_options.dumpInferenceDataPath);
+            std::error_code ec;
+            fs::create_directories(outDir, ec);
+
+            auto writeFile = [](fs::path const &path, void const *data, size_t size) -> bool
+            {
+                FILE *f = fopen(path.string().c_str(), "wb");
+                if (!f)
+                    return false;
+                bool const ok = fwrite(data, 1, size, f) == size;
+                fclose(f);
+                return ok;
+            };
+
+            bool const wroteWeights = writeFile(outDir / "weights.bin", pConverted, convertedSize);
+            device->unmapBuffer(stagingBuffer);
+            if (!wroteWeights)
+            {
+                fprintf(stderr, "DUMP FAILED: could not write weights.bin\n");
+                return 1;
+            }
+
+            if (!writeFile(outDir / "constants.bin", &inferenceData.constants, sizeof(inferenceData.constants)))
+            {
+                fprintf(stderr, "DUMP FAILED: could not write constants.bin\n");
+                return 1;
+            }
+
+            ntc::LatentTextureDesc const latentDesc = metadata->GetLatentTextureDesc();
+
+            std::vector<uint8_t> latentBytes;
+            Json::Value manifest;
+            manifest["width"] = latentDesc.width;
+            manifest["height"] = latentDesc.height;
+            manifest["arraySize"] = latentDesc.arraySize;
+            manifest["mipLevels"] = latentDesc.mipLevels;
+            manifest["format"] = "bgra4_unorm";
+            Json::Value subresources(Json::arrayValue);
+
+            for (int mip = 0; mip < latentDesc.mipLevels; ++mip)
+            {
+                for (int layer = 0; layer < latentDesc.arraySize; ++layer)
+                {
+                    ntc::LatentTextureFootprint footprint{};
+                    ntcStatus = metadata->GetLatentTextureFootprint(mip, layer, footprint);
+                    if (ntcStatus != ntc::Status::Ok)
+                    {
+                        fprintf(stderr, "DUMP FAILED: GetLatentTextureFootprint(%d, %d) returned %s: %s\n",
+                                mip, layer, ntc::StatusToString(ntcStatus), ntc::GetLastErrorMessage());
+                        return 1;
+                    }
+
+                    if (footprint.buffer.compressionType != ntc::CompressionType::None)
+                    {
+                        fprintf(stderr, "DUMP FAILED: latent subresource (mip=%d, layer=%d) is "
+                                        "GDeflate-compressed in the stream; raw read would dump "
+                                        "compressed bytes, not latents. Re-save with --gdeflate=none "
+                                        "or extend this dumper to call DecompressGDeflate*.\n",
+                                mip, layer);
+                        return 1;
+                    }
+
+                    size_t const byteOffset = latentBytes.size();
+                    size_t const byteSize = footprint.buffer.rangeInStream.size;
+                    latentBytes.resize(byteOffset + byteSize);
+                    if (!inputFile->Seek(footprint.buffer.rangeInStream.offset) ||
+                        !inputFile->Read(latentBytes.data() + byteOffset, byteSize))
+                    {
+                        fprintf(stderr, "DUMP FAILED: could not read latent subresource "
+                                        "(mip=%d, layer=%d) from stream.\n",
+                                mip, layer);
+                        return 1;
+                    }
+
+                    Json::Value sub;
+                    sub["mip"] = mip;
+                    sub["layer"] = layer;
+                    sub["width"] = footprint.width;
+                    sub["height"] = footprint.height;
+                    sub["rowPitch"] = Json::UInt64(footprint.rowPitch);
+                    sub["byteOffset"] = Json::UInt64(byteOffset);
+                    sub["byteSize"] = Json::UInt64(byteSize);
+                    subresources.append(sub);
+                }
+            }
+            manifest["subresources"] = subresources;
+
+            if (!writeFile(outDir / "latents.bin", latentBytes.data(), latentBytes.size()))
+            {
+                fprintf(stderr, "DUMP FAILED: could not write latents.bin\n");
+                return 1;
+            }
+
+            {
+                Json::StreamWriterBuilder builder;
+                std::string const manifestText = Json::writeString(builder, manifest);
+                if (!writeFile(outDir / "latents_manifest.json", manifestText.data(), manifestText.size()))
+                {
+                    fprintf(stderr, "DUMP FAILED: could not write latents_manifest.json\n");
+                    return 1;
+                }
+            }
+
+            printf("DUMP OK: weights.bin (%zu bytes), constants.bin (%zu bytes), latents.bin (%zu bytes, "
+                   "%dx%d, arraySize=%d, mipLevels=%d) -> %s\n",
+                   convertedSize, sizeof(inferenceData.constants), latentBytes.size(),
+                   latentDesc.width, latentDesc.height, latentDesc.arraySize, latentDesc.mipLevels,
+                   outDir.string().c_str());
             return 0;
         }
 
